@@ -731,6 +731,28 @@ core_init(void)
 	myaddr.sin_family = AF_INET;
 	myaddr.sin_addr.s_addr = htonl(INADDR_ANY);
 	memset(&port_free_map, 0xff, sizeof(port_free_map));
+	if (param.myaddr) {
+		struct hostent *he;
+
+		he = gethostbyname(param.myaddr);
+		if (he) {
+			if (he->h_addrtype != AF_INET
+			    || he->h_length != sizeof(myaddr.sin_addr)) {
+				fprintf(stderr,
+			"%s: can't deal with addr family %d or size %d\n",
+				    prog_name, he->h_addrtype, he->h_length);
+				exit(1);
+			}
+			memcpy(&myaddr.sin_addr, he->h_addr_list[0],
+			    sizeof(myaddr.sin_addr));
+		} else {
+			if (!inet_aton(optarg, &myaddr.sin_addr)) {
+				fprintf(stderr, "%s: invalid address %s\n",
+				    prog_name, optarg);
+				exit(1);
+			}
+		}
+	}
 
 	/*
 	 * Don't disturb just because a TCP connection closed on us... 
@@ -1010,6 +1032,12 @@ core_connect(Conn * s)
 			}
 		}
 		s->myport = myport;
+	} else if (myaddr.sin_addr.s_addr != htonl(INADDR_ANY)) {
+		SYSCALL(BIND,
+		    result = bind(sd, (struct sockaddr *) &myaddr,
+			sizeof(myaddr)));
+		if (result != 0)
+			goto failure;
 	}
 
 	SYSCALL(CONNECT,

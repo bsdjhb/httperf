@@ -95,6 +95,7 @@ typedef struct Cmdline_Params
     const char *server_name; /* fully qualified server name */
     int port;		/* (default) server port */
     const char *uri;	/* (default) uri */
+    const char *myaddr;
     Rate_Info rate;
     Time timeout;	/* watchdog timeout */
     Time think_timeout;	/* timeout for server think time */

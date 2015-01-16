@@ -121,6 +121,7 @@ static struct option longopts[] = {
 	{"max-connections", required_argument, &param.max_conns, 0},
 	{"max-piped-calls", required_argument, &param.max_piped, 0},
 	{"method", required_argument, (int *) &param.method, 0},
+	{"myaddr", required_argument, (int *) &param.myaddr, 0},
 	{"no-host-hdr", no_argument, &param.no_host_hdr, 1},
 	{"num-calls", required_argument, (int *) &param.num_calls, 0},
 	{"num-conns", required_argument, (int *) &param.num_conns, 0},
@@ -167,7 +168,7 @@ usage(void)
 	       "\t[--print-reply [header|body]] [--print-request [header|body]]\n"
 	       "\t[--rate X] [--recv-buffer N] [--retry-on-failure] "
 	       "[--send-buffer N]\n"
-	       "\t[--server S] [--server-name S] [--port N] [--uri S] \n"
+	       "\t[--server S] [--server-name S] [--port N] [--uri S] [--myaddr S]\n"
 #ifdef HAVE_SSL
 	       "\t[--ssl] [--ssl-ciphers L] [--ssl-no-reuse]\n"
 #endif
@@ -312,6 +313,8 @@ main(int argc, char **argv)
 				}
 				param.http_version =
 				    (major << 16) | (minor & 0xffff);
+			} else if (flag == &param.myaddr) {
+				param.myaddr = optarg;
 			} else if (flag == &param.burst_len) {
 				errno = 0;
 				param.burst_len = strtoul(optarg, &end, 10);
