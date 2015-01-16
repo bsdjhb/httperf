@@ -52,6 +52,7 @@
 
 static int num_conns_generated;
 static int num_conns_destroyed;
+static int num_conns_open;
 static Rate_Generator rg;
 
 static int
@@ -62,19 +63,30 @@ make_conn (Any_Type arg)
   if (num_conns_generated++ >= param.num_conns)
     return -1;
 
+  if (param.max_conns != 0 && num_conns_open >= param.max_conns)
+    return 0;
+
   s = conn_new ();
   if (!s)
     return -1;
 
   core_connect (s);
+  num_conns_open++;
   return 0;
 }
 
 static void
 destroyed (void)
 {
+  Any_Type arg;
+
   if (++num_conns_destroyed >= param.num_conns)
     core_exit ();
+  num_conns_open--;
+  if (param.max_conns != 0 && num_conns_open < param.max_conns) {
+    arg.l = 0;
+    make_conn(arg);
+  }
 }
 
 static void
