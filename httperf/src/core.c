@@ -76,7 +76,7 @@
 #define MAX_IP_PORT	65535
 #define BITSPERLONG	(8*sizeof (u_long))
 
-static int      running = 1;
+static volatile int      running = 1;
 static int      iteration;
 static u_long   max_burst_len;
 #ifdef HAVE_KEVENT
@@ -725,6 +725,11 @@ core_init(void)
 	memset(&wrfds, 0, sizeof(wrfds));
 #endif
 	memset(&myaddr, 0, sizeof(myaddr));
+#ifdef __FreeBSD__
+	myaddr.sin_len = sizeof(myaddr);
+#endif
+	myaddr.sin_family = AF_INET;
+	myaddr.sin_addr.s_addr = htonl(INADDR_ANY);
 	memset(&port_free_map, 0xff, sizeof(port_free_map));
 
 	/*
@@ -1208,21 +1213,17 @@ void
 core_loop(void)
 {
 	struct kevent ev;
-	bool write_event;
 	int n;
 	Any_Type   arg;
 	Conn      *conn;
 
-	write_event = false;
 	while (running) {
-		n = kevent(kq, write_event ? &ev : NULL, write_event ?
-		    1 : 0, &ev, 1, NULL);
-		if (n < 0) {
+		n = kevent(kq, NULL, 0, &ev, 1, NULL);
+		if (n < 0 && errno != EINTR) {
 			fprintf(stderr, "failed to fetch event: %s",
 			    strerror(errno));
 			exit(1);
 		}
-		write_event = false;
 
 		switch (ev.filter) {
 		case EVFILT_TIMER:
@@ -1244,9 +1245,7 @@ core_loop(void)
 	                    else
 #endif
 	                    if (ev.filter == EVFILT_WRITE) {
-				ev.flags = EV_DELETE;
-				write_event = true;
-				conn->writing = 0;
+				clear_active(conn, WRITE);
 	                        conn->state = S_CONNECTED;
 	                        arg.l = 0;
 	                        event_signal(EV_CONN_CONNECTED, (Object*)conn, arg);
