@@ -1246,6 +1246,8 @@ core_loop(void)
 	Conn      *conn;
 
 	while (running) {
+		++iteration;
+
 		n = kevent(kq, NULL, 0, &ev, 1, NULL);
 		if (n < 0 && errno != EINTR) {
 			fprintf(stderr, "failed to fetch event: %s",
