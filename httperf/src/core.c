@@ -1394,6 +1394,7 @@ void
 core_exit(void)
 {
 	running = 0;
+	param.num_conns = 0;
 
 	printf("Maximum connect burst length: %lu\n", max_burst_len);
 
