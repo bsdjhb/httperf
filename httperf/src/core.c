@@ -30,6 +30,10 @@
 
 #include "config.h"
 
+#ifdef __FreeBSD__
+#define	HAVE_KEVENT
+#endif
+
 #include <assert.h>
 #include <ctype.h>
 #include <errno.h>
@@ -46,6 +50,9 @@
 #include <sys/time.h>
 #ifdef HAVE_SYS_SELECT_H
 #include <sys/select.h>
+#endif
+#ifdef HAVE_KEVENT
+#include <sys/event.h>
 #endif
 
 #include <netinet/in.h>
@@ -72,11 +79,17 @@
 static int      running = 1;
 static int      iteration;
 static u_long   max_burst_len;
+#ifdef HAVE_KEVENT
+static int	kq, max_sd = 0;
+#else
 static fd_set   rdfds, wrfds;
 static int      min_sd = 0x7fffffff, max_sd = 0, alloced_sd_to_conn = 0;
 static struct timeval select_timeout;
+#endif
 static struct sockaddr_in myaddr;
+#ifndef HAVE_KEVENT
 Conn          **sd_to_conn;
+#endif
 static u_long   port_free_map[((MAX_IP_PORT - MIN_IP_PORT + BITSPERLONG)
 			       / BITSPERLONG)];
 static char     http10req[] =
@@ -113,13 +126,13 @@ static char     http11req_nohost[] =
 
 enum Syscalls {
 	SC_BIND, SC_CONNECT, SC_READ, SC_SELECT, SC_SOCKET, SC_WRITEV,
-	SC_SSL_READ, SC_SSL_WRITEV,
+	SC_SSL_READ, SC_SSL_WRITEV, SC_KEVENT,
 	SC_NUM_SYSCALLS
 };
 
 static const char *const syscall_name[SC_NUM_SYSCALLS] = {
 	"bind", "connct", "read", "select", "socket", "writev",
-	"ssl_read", "ssl_writev"
+	"ssl_read", "ssl_writev", "kevent"
 };
 static Time     syscall_time[SC_NUM_SYSCALLS];
 static u_int    syscall_count[SC_NUM_SYSCALLS];
@@ -208,6 +221,9 @@ hash_lookup(const char *server, size_t server_len, int port)
 static int
 lffs(long w)
 {
+#ifdef __FreeBSD__
+	return ffsl(w);
+#else
 	int             r;
 
 	if (sizeof(w) == sizeof(int))
@@ -223,6 +239,7 @@ lffs(long w)
 #endif
 	}
 	return r;
+#endif
 }
 
 static void
@@ -297,10 +314,10 @@ conn_timeout(struct Timer *t, Any_Type arg)
 		c = 0;
 		if (s->sd >= 0) {
 			now = timer_now();
-			if (FD_ISSET(s->sd, &rdfds)
+			if (s->reading
 				&& s->recvq && now >= s->recvq->timeout)
 				c = s->recvq;
-			else if (FD_ISSET(s->sd, &wrfds)
+			else if (s->writing
 				&& s->sendq && now >= s->sendq->timeout)
 				c = s->sendq;
 		}
@@ -318,18 +335,70 @@ conn_timeout(struct Timer *t, Any_Type arg)
 	core_close(s);
 }
 
+enum IO_DIR { READ, WRITE };
+
 static void
-set_active(Conn * s, fd_set * fdset)
+clear_active(Conn * s, enum IO_DIR dir)
+{
+ 	int             sd = s->sd;
+#ifdef HAVE_KEVENT
+	struct kevent	ev;
+
+	EV_SET(&ev, sd, dir == WRITE ? EVFILT_WRITE : EVFILT_READ, EV_DELETE,
+	    0, 0, s);
+	if (kevent(kq, &ev, 1, NULL, 0, NULL) < 0) {
+		fprintf(stderr, "failed to add %s filter\n", write ?
+		    "write" : "read");
+		exit(1);
+	}
+#else
+	fd_set *	fdset;
+	
+	if (dir == WRITE)
+		fdset = &wrfds;
+	else
+		fdset = &rdfds;
+	FD_CLR(sd, fdset);
+#endif
+	if (dir == WRITE)
+		s->writing = 0;
+	else
+		s->reading = 0;
+}
+
+static void
+set_active(Conn * s, enum IO_DIR dir)
 {
  	int             sd = s->sd;
 	Any_Type        arg;
 	Time            timeout;
+#ifdef HAVE_KEVENT
+	struct kevent	ev;
 
+	EV_SET(&ev, sd, dir == WRITE ? EVFILT_WRITE : EVFILT_READ, EV_ADD,
+	    0, 0, s);
+	if (kevent(kq, &ev, 1, NULL, 0, NULL) < 0) {
+		fprintf(stderr, "failed to add %s filter\n", write ?
+		    "write" : "read");
+		exit(1);
+	}
+#else
+	fd_set *	fdset;
+	
+	if (dir == WRITE)
+		fdset = &wrfds;
+	else
+		fdset = &rdfds;
 	FD_SET(sd, fdset);
 	if (sd < min_sd)
 		min_sd = sd;
+#endif
 	if (sd >= max_sd)
 		max_sd = sd;
+	if (dir == WRITE)
+		s->writing = 1;
+	else
+		s->reading = 1;
 
 	if (s->watchdog)
 		return;
@@ -434,7 +503,7 @@ do_send(Conn * conn)
 			 */
 			call->timeout =
 			    param.timeout ? timer_now() + param.timeout : 0.0;
-			set_active(conn, &wrfds);
+			set_active(conn, WRITE);
 			return;
 		}
 
@@ -444,7 +513,7 @@ do_send(Conn * conn)
 		conn->sendq = call->sendq_next;
 		if (!conn->sendq) {
 			conn->sendq_tail = 0;
-			FD_CLR(sd, &wrfds);
+			clear_active(conn, WRITE);
 		}
 		arg.l = 0;
 		event_signal(EV_CALL_SEND_STOP, (Object *) call, arg);
@@ -468,7 +537,7 @@ do_send(Conn * conn)
 		call->timeout = param.timeout + param.think_timeout;
 		if (call->timeout > 0.0)
 			call->timeout += timer_now();
-		set_active(conn, &rdfds);
+		set_active(conn, READ);
 		if (conn->state < S_REPLY_STATUS)
 			conn->state = S_REPLY_STATUS;	/* expecting reply
 							 * status */
@@ -491,7 +560,7 @@ recv_done(Call * call)
 
 	conn->recvq = call->recvq_next;
 	if (!conn->recvq) {
-		FD_CLR(conn->sd, &rdfds);
+		clear_active(conn, READ);
 		conn->recvq_tail = 0;
 	}
 	/*
@@ -602,7 +671,7 @@ do_recv(Conn * s)
 	while (buf_len > 0);
 
 	if (s->recvq)
-		set_active(c->conn, &rdfds);
+		set_active(c->conn, READ);
 }
 
 struct sockaddr_in *
@@ -651,8 +720,10 @@ core_init(void)
 	struct rlimit   rlimit;
 
 	memset(&hash_table, 0, sizeof(hash_table));
+#ifndef HAVE_KEVENT
 	memset(&rdfds, 0, sizeof(rdfds));
 	memset(&wrfds, 0, sizeof(wrfds));
+#endif
 	memset(&myaddr, 0, sizeof(myaddr));
 	memset(&port_free_map, 0xff, sizeof(port_free_map));
 
@@ -661,6 +732,27 @@ core_init(void)
 	 */
 	signal(SIGPIPE, SIG_IGN);
 
+#ifdef HAVE_KEVENT
+	kq = kqueue();
+	if (kq < 0) {
+		fprintf(stderr,
+		    "%s: failed to create kqueue: %s", prog_name,
+		    strerror(errno));
+		exit(1);
+	}
+
+	/*
+	 * TIMER_INTERVAL doesn't exist anymore, so just take a wild
+	 * guess.
+	 */
+	struct kevent ev;
+	EV_SET(&ev, 0, EVFILT_TIMER, EV_ADD, NOTE_MSECONDS, 1, NULL);
+	if (kevent(kq, &ev, 1, NULL, 0, NULL) < 0) {
+		fprintf(stderr,
+		    "%s: failed to add timer event: %s", prog_name,
+		    strerror(errno));
+	}	
+#else
 #ifdef DONT_POLL
 	/*
 	 * This causes select() to take several milliseconds on both Linux/x86 
@@ -677,6 +769,7 @@ core_init(void)
 	 */
 	select_timeout.tv_sec = 0;
 	select_timeout.tv_usec = 0;
+#endif
 #endif
 
 	/*
@@ -735,13 +828,13 @@ core_ssl_connect(Conn * s)
 					 SSL_ERROR_WANT_READ) ? "read" :
 					"write");
 			if (reason == SSL_ERROR_WANT_READ
-			    && !FD_ISSET(s->sd, &rdfds)) {
-				FD_CLR(s->sd, &wrfds);
-				set_active(s, &rdfds);
+			    && !s->reading) {
+				clear_active(s, WRITE);
+				set_active(s, READ);
 			} else if (reason == SSL_ERROR_WANT_WRITE
-				   && !FD_ISSET(s->sd, &wrfds)) {
-				FD_CLR(s->sd, &rdfds);
-				set_active(s, &wrfds);
+				   && !s->writing) {
+				clear_active(s, READ);
+				set_active(s, WRITE);
 			}
 			return;
 		}
@@ -758,7 +851,7 @@ core_ssl_connect(Conn * s)
 		fprintf(stderr, "core_ssl_connect: SSL is connected!\n");
 
 	if (DBG > 1) {
-		SSL_CIPHER     *ssl_cipher;
+		const SSL_CIPHER     *ssl_cipher;
 
 		ssl_cipher = SSL_get_current_cipher(s->ssl);
 		if (!ssl_cipher)
@@ -852,6 +945,7 @@ core_connect(Conn * s)
 	}
 
 	s->sd = sd;
+#ifndef HAVE_KEVENT
 	if (sd >= alloced_sd_to_conn) {
 		size_t          size, old_size;
 
@@ -873,6 +967,7 @@ core_connect(Conn * s)
 	}
 	assert(!sd_to_conn[sd]);
 	sd_to_conn[sd] = s;
+#endif
 
 	sin = hash_lookup(s->hostname, s->hostname_len, s->port);
 	if (!sin) {
@@ -932,7 +1027,7 @@ core_connect(Conn * s)
 		 * connection establishment.  
 		 */
 		s->state = S_CONNECTING;
-		set_active(s, &wrfds);
+		set_active(s, WRITE);
 		if (param.timeout > 0.0) {
 			arg.vp = s;
 			assert(!s->watchdog);
@@ -1033,7 +1128,7 @@ core_send(Conn * conn, Call * call)
 			return -1;
 		call->timeout =
 		    param.timeout ? timer_now() + param.timeout : 0.0;
-		set_active(conn, &wrfds);
+		set_active(conn, WRITE);
 	} else {
 		conn->sendq_tail->sendq_next = call;
 		conn->sendq_tail = call;
@@ -1089,9 +1184,13 @@ core_close(Conn * conn)
 
 	if (sd >= 0) {
 		close(sd);
+#ifndef HAVE_KEVENT
 		sd_to_conn[sd] = 0;
 		FD_CLR(sd, &wrfds);
 		FD_CLR(sd, &rdfds);
+#endif
+		conn->reading = 0;
+		conn->writing = 0;
 	}
 	if (conn->myport > 0)
 		port_put(conn->myport);
@@ -1104,6 +1203,67 @@ core_close(Conn * conn)
 	conn_dec_ref(conn);
 }
 
+#ifdef HAVE_KEVENT
+void
+core_loop(void)
+{
+	struct kevent ev;
+	bool write_event;
+	int n;
+	Any_Type   arg;
+	Conn      *conn;
+
+	write_event = false;
+	while (running) {
+		n = kevent(kq, write_event ? &ev : NULL, write_event ?
+		    1 : 0, &ev, 1, NULL);
+		if (n < 0) {
+			fprintf(stderr, "failed to fetch event: %s",
+			    strerror(errno));
+			exit(1);
+		}
+		write_event = false;
+
+		switch (ev.filter) {
+		case EVFILT_TIMER:
+			timer_tick();
+			break;
+		case EVFILT_READ:
+		case EVFILT_WRITE:
+			conn = ev.udata;
+	                conn_inc_ref(conn);
+
+	                if (conn->watchdog) {
+	                    timer_cancel(conn->watchdog);
+	                    conn->watchdog = 0;
+	                }
+	                if (conn->state == S_CONNECTING) {
+#ifdef HAVE_SSL
+	                    if (param.use_ssl)
+	                        core_ssl_connect(conn);
+	                    else
+#endif
+	                    if (ev.filter == EVFILT_WRITE) {
+				ev.flags = EV_DELETE;
+				write_event = true;
+				conn->writing = 0;
+	                        conn->state = S_CONNECTED;
+	                        arg.l = 0;
+	                        event_signal(EV_CONN_CONNECTED, (Object*)conn, arg);
+	                    }
+	                } else {
+			    if (ev.filter == EVFILT_WRITE && conn->sendq)
+	                        do_send(conn);
+	                    if (ev.filter == EVFILT_READ && conn->recvq)
+	                        do_recv(conn);
+	                }
+	                    
+	                conn_dec_ref(conn);
+			break;
+		}
+	}
+}
+#else
 void
 core_loop(void)
 {
@@ -1175,7 +1335,7 @@ core_loop(void)
 	                        else
 #endif
 	                        if (is_writable) {
-	                            FD_CLR(sd, &wrfds);
+				    clear_active(conn, WRITE);
 	                            conn->state = S_CONNECTED;
 	                            arg.l = 0;
 	                            event_signal(EV_CONN_CONNECTED, (Object*)conn, arg);
@@ -1199,6 +1359,7 @@ core_loop(void)
 	    }
 	}
 }
+#endif
 
 void
 core_exit(void)

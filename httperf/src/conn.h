@@ -99,6 +99,8 @@ typedef struct Conn
     size_t content_length;	/* content length (or INF if unknown) */
     u_int has_body : 1;		/* does reply have a body? */
     u_int is_chunked : 1;	/* is the reply chunked? */
+    u_int reading : 1;
+    u_int writing : 1;
     char line_buf[MAX_HDR_LINE_LEN];	/* default line buffer */
 
 #ifdef HAVE_SSL
