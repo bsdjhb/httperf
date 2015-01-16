@@ -99,14 +99,14 @@ typedef struct Cmdline_Params
     Rate_Info rate;
     Time timeout;	/* watchdog timeout */
     Time think_timeout;	/* timeout for server think time */
-    int num_conns;	/* # of connections to generate */
-    int num_calls;	/* # of calls to generate per connection */
-    int burst_len;	/* # of calls to burst back-to-back */
-    int max_piped;	/* max # of piped calls per connection */
-    int max_conns;	/* max # of connections per session */
+    u_long num_conns;	/* # of connections to generate */
+    u_long num_calls;	/* # of calls to generate per connection */
+    u_long burst_len;	/* # of calls to burst back-to-back */
+    u_long max_piped;	/* max # of piped calls per connection */
+    u_long max_conns;	/* max # of connections per session */
     int hog;		/* client may hog as much resources as possible */
-    int send_buffer_size;
-    int recv_buffer_size;
+    u_long send_buffer_size;
+    u_long recv_buffer_size;
     int failure_status;	/* status code that should be considered failure */
     int retry_on_failure; /* when a call fails, should we retry? */
     int close_with_reset; /* close connections with TCP RESET? */

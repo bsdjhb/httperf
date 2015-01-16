@@ -110,7 +110,7 @@ static Time     perf_sample_start;
 
 static struct option longopts[] = {
 	{"add-header", required_argument, (int *) &param.additional_header, 0},
-	{"burst-length", required_argument, &param.burst_len, 0},
+	{"burst-length", required_argument, (int *) &param.burst_len, 0},
 	{"client", required_argument, (int *) &param.client, 0},
 	{"close-with-reset", no_argument, &param.close_with_reset, 1},
 	{"debug", required_argument, 0, 'd'},
@@ -118,8 +118,8 @@ static struct option longopts[] = {
 	{"help", no_argument, 0, 'h'},
 	{"hog", no_argument, &param.hog, 1},
 	{"http-version", required_argument, (int *) &param.http_version, 0},
-	{"max-connections", required_argument, &param.max_conns, 0},
-	{"max-piped-calls", required_argument, &param.max_piped, 0},
+	{"max-connections", required_argument, (int *) &param.max_conns, 0},
+	{"max-piped-calls", required_argument, (int *) &param.max_piped, 0},
 	{"method", required_argument, (int *) &param.method, 0},
 	{"myaddr", required_argument, (int *) &param.myaddr, 0},
 	{"no-host-hdr", no_argument, &param.no_host_hdr, 1},
@@ -348,8 +348,7 @@ main(int argc, char **argv)
 			} else if (flag == &param.max_conns) {
 				errno = 0;
 				param.max_conns = strtoul(optarg, &end, 10);
-				if (errno == ERANGE || end == optarg || *end
-				    || param.max_conns < 0) {
+				if (errno == ERANGE || end == optarg || *end) {
 					fprintf(stderr,
 						"%s: illegal max. # of connection %s\n",
 						prog_name, optarg);
@@ -358,8 +357,7 @@ main(int argc, char **argv)
 			} else if (flag == &param.max_piped) {
 				errno = 0;
 				param.max_piped = strtoul(optarg, &end, 10);
-				if (errno == ERANGE || end == optarg || *end
-				    || param.max_piped < 0) {
+				if (errno == ERANGE || end == optarg || *end) {
 					fprintf(stderr,
 						"%s: illegal max. # of piped calls %s\n",
 						prog_name, optarg);
@@ -1008,9 +1006,9 @@ main(int argc, char **argv)
 		printf(" --http-version=%u.%u", param.http_version >> 16,
 		       param.http_version & 0xffff);
 	if (param.max_conns)
-		printf(" --max-connections=%u", param.max_conns);
+		printf(" --max-connections=%lu", param.max_conns);
 	if (param.max_piped)
-		printf(" --max-piped-calls=%u", param.max_piped);
+		printf(" --max-piped-calls=%lu", param.max_piped);
 	if (param.rate.rate_param > 0.0) {
 		switch (param.rate.dist) {
 		case DETERMINISTIC:
@@ -1048,10 +1046,10 @@ main(int argc, char **argv)
 			break;
 		}
 	}
-	printf(" --send-buffer=%d", param.send_buffer_size);
+	printf(" --send-buffer=%lu", param.send_buffer_size);
 	if (param.retry_on_failure)
 		printf(" --retry-on-failure");
-	printf(" --recv-buffer=%d", param.recv_buffer_size);
+	printf(" --recv-buffer=%lu", param.recv_buffer_size);
 	if (param.session_cookies)
 		printf(" --session-cookies");
 #ifdef HAVE_SSL
@@ -1084,12 +1082,12 @@ main(int argc, char **argv)
 			       param.wsess.num_calls, param.wsess.think_time);
 		else {
 			if (param.num_conns)
-				printf(" --num-conns=%d", param.num_conns);
+				printf(" --num-conns=%lu", param.num_conns);
 			if (param.num_calls)
-				printf(" --num-calls=%d", param.num_calls);
+				printf(" --num-calls=%lu", param.num_calls);
 		}
 		if (param.burst_len != 1)
-			printf(" --burst-length=%d", param.burst_len);
+			printf(" --burst-length=%lu", param.burst_len);
 		if (param.wset.num_files)
 			printf(" --wset=%u,%.3f",
 			       param.wset.num_files,
