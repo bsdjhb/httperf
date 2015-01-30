@@ -314,7 +314,7 @@ main(int argc, char **argv)
 				param.http_version =
 				    (major << 16) | (minor & 0xffff);
 			} else if (flag == &param.myaddr) {
-				param.myaddr = optarg;
+				core_add_addresses(optarg);
 			} else if (flag == &param.burst_len) {
 				errno = 0;
 				param.burst_len = strtoul(optarg, &end, 10);

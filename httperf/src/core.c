@@ -55,6 +55,9 @@
 #include <sys/event.h>
 #endif
 
+#ifdef __FreeBSD__
+#include <ifaddrs.h>
+#endif
 #include <netinet/in.h>
 #include <netinet/tcp.h>
 #include <arpa/inet.h>
@@ -76,6 +79,12 @@
 #define MAX_IP_PORT	65535
 #define BITSPERLONG	(8*sizeof (u_long))
 
+struct address_pool {
+	struct in_addr *addresses;
+	int count;
+	int last;
+};
+
 static volatile int      running = 1;
 static int      iteration;
 static u_long   max_burst_len;
@@ -87,6 +96,7 @@ static int      min_sd = 0x7fffffff, max_sd = 0, alloced_sd_to_conn = 0;
 static struct timeval select_timeout;
 #endif
 static struct sockaddr_in myaddr;
+static struct address_pool myaddrs;
 #ifndef HAVE_KEVENT
 Conn          **sd_to_conn;
 #endif
@@ -714,6 +724,135 @@ core_addr_intern(const char *server, size_t server_len, int port)
 	return &h->sin;
 }
 
+static void
+core_add_address(struct in_addr ip)
+{
+
+	myaddrs.addresses = realloc(myaddrs.addresses, sizeof(struct in_addr) *
+	    (myaddrs.count + 1));
+	if (myaddrs.addresses == NULL) {
+		fprintf(stderr,
+			"%s: out of memory parsing address list\n",
+			prog_name);
+		exit(1);
+	}
+	myaddrs.addresses[myaddrs.count] = ip;
+	myaddrs.count++;
+}
+
+/*
+ * Parses the value provided to --myaddr.  A value can either be a
+ * hostname or IP, or an IP range.  Multiple values can be specified
+ * in which case all matches are added to a pool which new connections
+ * use in a round-robin fashion.  An interface name may also be
+ * specified in which case all IP addresses assigned to that interface
+ * are used.
+ */
+void
+core_add_addresses(const char *spec)
+{
+	struct hostent *he;
+	struct in_addr ip;
+#ifdef __FreeBSD__
+	struct ifaddrs *iflist, *ifa;
+#endif
+	char *cp;
+
+	/* First try to resolve the argument as a hostname. */
+	he = gethostbyname(spec);
+	if (he) {
+		if (he->h_addrtype != AF_INET ||
+		    he->h_length != sizeof(struct in_addr)) {
+			fprintf(stderr,
+				"%s: can't deal with addr family %d or size %d\n",
+				prog_name, he->h_addrtype, he->h_length);
+			exit(1);
+		}
+		core_add_address(*(struct in_addr *)he->h_addr_list[0]);
+		return;
+	}
+
+	/* If there seems to be an IP range, try that next. */
+	cp = strchr(spec, '-');
+	if (cp != NULL) {
+		char *start_s;
+		struct in_addr end_ip;
+
+		start_s = strndup(spec, cp - spec);
+		if (!inet_aton(start_s, &ip)) {
+			fprintf(stderr, "%s: invalid starting address %s\n",
+			    prog_name, start_s);
+			exit(1);
+		}
+		if (!inet_aton(cp + 1, &end_ip)) {
+			fprintf(stderr, "%s: invalid ending address %s\n",
+			    prog_name, cp + 1);
+			exit(1);
+		}
+
+		while (ip.s_addr != end_ip.s_addr) {
+			core_add_address(ip);
+			ip.s_addr += htonl(1);
+		}
+		core_add_address(end_ip);
+		return;
+	}
+
+	/* Check for a single IP. */
+	if (inet_aton(spec, &ip)) {
+		core_add_address(ip);
+		return;
+	}
+
+#ifdef __FreeBSD__
+	/* Check for an interface name. */
+	if (getifaddrs(&iflist) == 0) {
+		int found;
+
+		found = 0;
+		for (ifa = iflist; ifa != NULL; ifa = ifa->ifa_next) {
+			if (strcmp(ifa->ifa_name, spec) != 0)
+				continue;
+			if (found == 0)
+				found = 1;
+			if (ifa->ifa_addr->sa_family != AF_INET)
+				continue;
+			found = 2;
+			core_add_address(
+			    ((struct sockaddr_in *)ifa->ifa_addr)->sin_addr);
+		}
+		freeifaddrs(iflist);
+		if (found == 2)
+			return;
+		if (found == 1) {
+			fprintf(stderr,
+			    "%s: no valid addresses found on interface %s\n",
+			    prog_name, spec);
+			exit(1);
+		}
+	}
+#endif
+
+	fprintf(stderr, "%s: invalid address list %s\n",
+	    prog_name, spec);
+	exit(1);
+}
+
+static void
+core_get_next_myaddr(struct in_addr *ip)
+{
+
+	if (myaddrs.count == 0) {
+		ip->s_addr = htonl(INADDR_ANY);
+		return;
+	}
+	assert(myaddrs.last >= 0 && myaddrs.last < myaddrs.count);
+	*ip = myaddrs.addresses[myaddrs.last];
+	myaddrs.last++;
+	if (myaddrs.last == myaddrs.count)
+		myaddrs.last = 0;
+}
+
 void
 core_init(void)
 {
@@ -731,27 +870,12 @@ core_init(void)
 	myaddr.sin_family = AF_INET;
 	myaddr.sin_addr.s_addr = htonl(INADDR_ANY);
 	memset(&port_free_map, 0xff, sizeof(port_free_map));
-	if (param.myaddr) {
-		struct hostent *he;
 
-		he = gethostbyname(param.myaddr);
-		if (he) {
-			if (he->h_addrtype != AF_INET
-			    || he->h_length != sizeof(myaddr.sin_addr)) {
-				fprintf(stderr,
-			"%s: can't deal with addr family %d or size %d\n",
-				    prog_name, he->h_addrtype, he->h_length);
-				exit(1);
-			}
-			memcpy(&myaddr.sin_addr, he->h_addr_list[0],
-			    sizeof(myaddr.sin_addr));
-		} else {
-			if (!inet_aton(optarg, &myaddr.sin_addr)) {
-				fprintf(stderr, "%s: invalid address %s\n",
-				    prog_name, optarg);
-				exit(1);
-			}
-		}
+	if (param.hog && myaddrs.count > 1) {
+		fprintf(stderr,
+		    "%s: --hog does not work with multiple source addresses\n",
+		    prog_name);
+		exit(1);
 	}
 
 	/*
@@ -1010,6 +1134,7 @@ core_connect(Conn * s)
 	if (s->state >= S_CLOSING)
 		goto failure;
 
+	core_get_next_myaddr(&myaddr.sin_addr);
 	if (param.hog) {
 		while (1) {
 			myport = port_get();
