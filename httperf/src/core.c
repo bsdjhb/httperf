@@ -53,6 +53,14 @@
 #endif
 #ifdef HAVE_KEVENT
 #include <sys/event.h>
+
+/*
+ * Older systems using kevent() always specify the time in
+ * milliseconds and do not have a flag to select a different scale.
+ */
+#ifndef NOTE_MSECONDS
+#define	NOTE_MSECONDS		0
+#endif
 #endif
 
 #ifdef __FreeBSD__
