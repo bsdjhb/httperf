@@ -83,10 +83,6 @@ destroyed (void)
   if (++num_conns_destroyed >= param.num_conns)
     core_exit ();
   num_conns_open--;
-  if (param.max_conns != 0 && num_conns_open < param.max_conns) {
-    arg.l = 0;
-    make_conn(arg);
-  }
 }
 
 static void
