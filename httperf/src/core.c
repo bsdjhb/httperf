@@ -1202,6 +1202,8 @@ core_connect(Conn * s)
 			fprintf(stderr,
 				"%s.core_connect.connect: %s (max_sd=%d)\n",
 				prog_name, strerror(errno), max_sd);
+		if (s->myport > 0)
+			port_put(s->myport);
 		goto failure;
 	}
 	return 0;
