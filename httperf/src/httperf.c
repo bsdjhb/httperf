@@ -1002,6 +1002,8 @@ main(int argc, char **argv)
 		printf(" --think-timeout=%g", param.think_timeout);
 	if (param.timeout > 0)
 		printf(" --timeout=%g", param.timeout);
+	if (param.runtime > 0)
+		printf(" --runtime=%g", param.runtime);
 	printf(" --client=%u/%u", param.client.id, param.client.num_clients);
 	if (param.server)
 		printf(" --server=%s", param.server);
