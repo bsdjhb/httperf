@@ -110,6 +110,7 @@ static Time     perf_sample_start;
 
 static struct option longopts[] = {
 	{"add-header", required_argument, (int *) &param.additional_header, 0},
+	{"add-header-file", required_argument, (int *) &param.additional_header_file, 0 },
 	{"burst-length", required_argument, (int *) &param.burst_len, 0},
 	{"client", required_argument, (int *) &param.client, 0},
 	{"close-with-reset", no_argument, &param.close_with_reset, 1},
@@ -295,6 +296,8 @@ main(int argc, char **argv)
 				param.method = optarg;
 			else if (flag == &param.additional_header)
 				param.additional_header = optarg;
+			else if (flag == &param.additional_header_file)
+				param.additional_header_file = optarg;
 			else if (flag == &param.num_calls) {
 				errno = 0;
 				param.num_calls = strtoul(optarg, &end, 10);
@@ -959,7 +962,8 @@ main(int argc, char **argv)
 		gen[num_gen++] = &sess_cookie;
 	}
 
-	if (param.additional_header || param.method)
+	if (param.additional_header || param.additional_header_file ||
+	    param.method)
 		gen[num_gen++] = &misc;
 
 	/*
@@ -1075,6 +1079,8 @@ main(int argc, char **argv)
 #endif
 	if (param.additional_header)
 		printf(" --add-header='%s'", param.additional_header);
+	if (param.additional_header_file)
+		printf(" --add-header-file='%s'", param.additional_header_file);
 	if (param.method)
 		printf(" --method=%s", param.method);
 	if (param.use_timer_cache)

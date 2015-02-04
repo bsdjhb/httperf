@@ -122,6 +122,7 @@ typedef struct Cmdline_Params
 #endif
     int use_timer_cache;
     const char *additional_header;	/* additional request header(s) */
+    const char *additional_header_file;
     const char *method;	/* default call method */
     struct
       {
