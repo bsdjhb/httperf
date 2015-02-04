@@ -132,6 +132,7 @@ static struct option longopts[] = {
 	{"rate", required_argument, (int *) &param.rate, 0},
 	{"recv-buffer", required_argument, (int *) &param.recv_buffer_size, 0},
 	{"retry-on-failure", no_argument, &param.retry_on_failure, 1},
+	{"runtime", required_argument, (int *) &param.runtime, 0},
 	{"send-buffer", required_argument, (int *) &param.send_buffer_size, 0},
 	{"server", required_argument, (int *) &param.server, 0},
 	{"server-name", required_argument, (int *) &param.server_name, 0},
@@ -643,6 +644,16 @@ main(int argc, char **argv)
 				if (errno == ERANGE || end == optarg || *end) {
 					fprintf(stderr,
 						"%s: illegal connect timeout %s\n",
+						prog_name, optarg);
+					exit(1);
+				}
+			} else if (flag == &param.runtime) {
+				errno = 0;
+				param.runtime = strtod(optarg, &end);
+				if (errno == ERANGE || end == optarg || *end ||
+				    param.runtime <= 0.0) {
+					fprintf(stderr,
+						"%s: illegal runtime value %s\n",
 						prog_name, optarg);
 					exit(1);
 				}

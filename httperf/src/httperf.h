@@ -99,6 +99,7 @@ typedef struct Cmdline_Params
     Rate_Info rate;
     Time timeout;	/* watchdog timeout */
     Time think_timeout;	/* timeout for server think time */
+    Time runtime;	/* how long to run the test */
     u_long num_conns;	/* # of connections to generate */
     u_long num_calls;	/* # of calls to generate per connection */
     u_long burst_len;	/* # of calls to burst back-to-back */

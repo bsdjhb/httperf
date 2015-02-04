@@ -861,10 +861,18 @@ core_get_next_myaddr(struct in_addr *ip)
 		myaddrs.last = 0;
 }
 
+static void
+core_runtime_timer(struct Timer *t, Any_Type arg)
+{
+
+	core_exit();
+}
+
 void
 core_init(void)
 {
 	struct rlimit   rlimit;
+	Any_Type        arg;
 
 	memset(&hash_table, 0, sizeof(hash_table));
 #ifndef HAVE_KEVENT
@@ -956,6 +964,10 @@ core_init(void)
 	if (param.server)
 		core_addr_intern(param.server, strlen(param.server),
 				 param.port);
+	if (param.runtime) {
+		arg.l = 0;
+		timer_schedule(core_runtime_timer, arg, param.runtime);
+	}
 }
 
 #ifdef HAVE_SSL
