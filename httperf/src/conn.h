@@ -66,6 +66,8 @@ typedef enum Conn_State
   }
 Conn_State;
 
+struct local_addr;
+
 typedef struct Conn
   {
     Object obj;
@@ -92,6 +94,7 @@ typedef struct Conn
     int port;			/* server's port (or -1 for default) */
     int	sd;			/* socket descriptor */
     int myport;			/* local port number or -1 */
+    struct local_addr *myaddr;
     /* Since replies are read off the socket sequentially, much of the
        reply-processing related state can be kept here instead of in
        the reply structure: */

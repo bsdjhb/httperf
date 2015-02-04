@@ -87,8 +87,16 @@
 #define MAX_IP_PORT	65535
 #define BITSPERLONG	(8*sizeof (u_long))
 
+struct local_addr {
+	struct in_addr ip;
+	u_long port_free_map[((MAX_IP_PORT - MIN_IP_PORT + BITSPERLONG)
+		    / BITSPERLONG)];
+	u_long mask;
+	int previous;
+};
+
 struct address_pool {
-	struct in_addr *addresses;
+	struct local_addr *addresses;
 	int count;
 	int last;
 };
@@ -108,8 +116,6 @@ static struct address_pool myaddrs;
 #ifndef HAVE_KEVENT
 Conn          **sd_to_conn;
 #endif
-static u_long   port_free_map[((MAX_IP_PORT - MIN_IP_PORT + BITSPERLONG)
-			       / BITSPERLONG)];
 static char     http10req[] =
     " HTTP/1.0\r\nUser-Agent: httperf/" VERSION
     "\r\nConnection: keep-alive\r\nHost: ";
@@ -261,30 +267,28 @@ lffs(long w)
 }
 
 static void
-port_put(int port)
+port_put(struct local_addr *addr, int port)
 {
 	int             i, bit;
 
 	port -= MIN_IP_PORT;
 	i = port / BITSPERLONG;
 	bit = port % BITSPERLONG;
-	port_free_map[i] |= (1UL << bit);
+	addr->port_free_map[i] |= (1UL << bit);
 }
 
 static int
-port_get(void)
+port_get(struct local_addr *addr)
 {
-	static u_long   mask = ~0UL;
-	static int      previous = 0;
 	int             port, bit, i;
 
-	i = previous;
-	if ((port_free_map[i] & mask) == 0) {
+	i = addr->previous;
+	if ((addr->port_free_map[i] & addr->mask) == 0) {
 		do {
 			++i;
-			if (i >= NELEMS(port_free_map))
+			if (i >= NELEMS(addr->port_free_map))
 				i = 0;
-			if (i == previous) {
+			if (i == addr->previous) {
 				if (DBG > 0)
 					fprintf(stderr,
 						"%s.port_get: Yikes! I'm out of port numbers!\n",
@@ -292,17 +296,17 @@ port_get(void)
 				return -1;
 			}
 		}
-		while (port_free_map[i] == 0);
-		mask = ~0UL;
+		while (addr->port_free_map[i] == 0);
+		addr->mask = ~0UL;
 	}
-	previous = i;
+	addr->previous = i;
 
-	bit = lffs(port_free_map[i] & mask) - 1;
+	bit = lffs(addr->port_free_map[i] & addr->mask) - 1;
 	if (bit >= BITSPERLONG - 1)
-		mask = 0;
+		addr->mask = 0;
 	else
-		mask = ~((1UL << (bit + 1)) - 1);
-	port_free_map[i] &= ~(1UL << bit);
+		addr->mask = ~((1UL << (bit + 1)) - 1);
+	addr->port_free_map[i] &= ~(1UL << bit);
 	port = bit + i * BITSPERLONG + MIN_IP_PORT;
 	return port;
 }
@@ -735,16 +739,21 @@ core_addr_intern(const char *server, size_t server_len, int port)
 static void
 core_add_address(struct in_addr ip)
 {
+	struct local_addr *addr;
 
-	myaddrs.addresses = realloc(myaddrs.addresses, sizeof(struct in_addr) *
-	    (myaddrs.count + 1));
+	myaddrs.addresses = realloc(myaddrs.addresses,
+	    sizeof(struct local_addr) * (myaddrs.count + 1));
 	if (myaddrs.addresses == NULL) {
 		fprintf(stderr,
 			"%s: out of memory parsing address list\n",
 			prog_name);
 		exit(1);
 	}
-	myaddrs.addresses[myaddrs.count] = ip;
+	addr = &myaddrs.addresses[myaddrs.count];
+	addr->ip = ip;
+	memset(&addr->port_free_map, 0xff, sizeof(addr->port_free_map));
+	addr->mask = ~0UL;
+	addr->previous = 0;
 	myaddrs.count++;
 }
 
@@ -846,19 +855,17 @@ core_add_addresses(const char *spec)
 	exit(1);
 }
 
-static void
-core_get_next_myaddr(struct in_addr *ip)
+static struct local_addr *
+core_get_next_myaddr(void)
 {
+	struct local_addr *addr;
 
-	if (myaddrs.count == 0) {
-		ip->s_addr = htonl(INADDR_ANY);
-		return;
-	}
 	assert(myaddrs.last >= 0 && myaddrs.last < myaddrs.count);
-	*ip = myaddrs.addresses[myaddrs.last];
+	addr = &myaddrs.addresses[myaddrs.last];
 	myaddrs.last++;
 	if (myaddrs.last == myaddrs.count)
 		myaddrs.last = 0;
+	return (addr);
 }
 
 static void
@@ -885,14 +892,9 @@ core_init(void)
 #endif
 	myaddr.sin_family = AF_INET;
 	myaddr.sin_addr.s_addr = htonl(INADDR_ANY);
-	memset(&port_free_map, 0xff, sizeof(port_free_map));
 
-	if (param.hog && myaddrs.count > 1) {
-		fprintf(stderr,
-		    "%s: --hog does not work with multiple source addresses\n",
-		    prog_name);
-		exit(1);
-	}
+	if (myaddrs.count == 0)
+		core_add_address(myaddr.sin_addr);
 
 	/*
 	 * Don't disturb just because a TCP connection closed on us... 
@@ -1154,10 +1156,11 @@ core_connect(Conn * s)
 	if (s->state >= S_CLOSING)
 		goto failure;
 
-	core_get_next_myaddr(&myaddr.sin_addr);
+	s->myaddr = core_get_next_myaddr();
+	myaddr.sin_addr = s->myaddr->ip;
 	if (param.hog) {
 		while (1) {
-			myport = port_get();
+			myport = port_get(s->myaddr);
 			if (myport < 0)
 				goto failure;
 
@@ -1223,7 +1226,7 @@ core_connect(Conn * s)
 				"%s.core_connect.connect: %s (max_sd=%d)\n",
 				prog_name, strerror(errno), max_sd);
 		if (s->myport > 0)
-			port_put(s->myport);
+			port_put(s->myaddr, s->myport);
 		goto failure;
 	}
 	return 0;
@@ -1373,7 +1376,7 @@ core_close(Conn * conn)
 		conn->writing = 0;
 	}
 	if (conn->myport > 0)
-		port_put(conn->myport);
+		port_put(conn->myaddr, conn->myport);
 
 	/*
 	 * A connection that has been closed is not useful anymore, so we give 
